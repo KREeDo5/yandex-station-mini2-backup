@@ -1,0 +1,205 @@
+{
+  "schema_version": "1.0",
+  "tool": {
+    "name": "yandex-station-mini2-backup",
+    "version": "0.1.0"
+  },
+  "generated_by_ai": true,
+  "ai_disclosure": "Synthetic, redacted example. No real device data, paths or hashes.",
+  "synthetic_example": true,
+  "started_at": "2026-01-01T00:00:00Z",
+  "completed_at": "2026-01-01T00:30:00Z",
+  "status": "completed",
+  "host": {
+    "hostname": "example.invalid",
+    "port": 2222,
+    "user": "root",
+    "identity_file_basename": "id_example",
+    "host_key_verification": "strict"
+  },
+  "device": {
+    "uid": 0,
+    "model": "Yandex Station Mini 2 (example)",
+    "model_source": "device_tree",
+    "model_article_match": false,
+    "firmware_version": "user-supplied-example",
+    "firmware_source": "user_provided",
+    "uname": "Linux 4.9.68 aarch64",
+    "kernel": "4.9.68",
+    "architecture": "aarch64",
+    "nanddump_version": "nanddump (example)"
+  },
+  "layout": {
+    "profile_match": true,
+    "offsets_verified": false,
+    "expected_geometry": {
+      "erasesize": 131072,
+      "writesize": 2048,
+      "oobsize": 64
+    },
+    "devices": {
+      "mtd0": {
+        "name": "bootloader",
+        "expected_size": 2097152,
+        "expected_offset": 0,
+        "offset_verified": false,
+        "proc_size": 2097152,
+        "proc_erasesize": 131072,
+        "proc_name": "bootloader"
+      },
+      "mtd1": {
+        "name": "tpl",
+        "expected_size": 2097152,
+        "expected_offset": 8388608,
+        "offset_verified": false,
+        "proc_size": 2097152,
+        "proc_erasesize": 131072,
+        "proc_name": "tpl"
+      },
+      "mtd6": {
+        "name": "recovery",
+        "expected_size": 52166656,
+        "expected_offset": 216268800,
+        "offset_verified": false,
+        "proc_size": 52166656,
+        "proc_erasesize": 131072,
+        "proc_name": "recovery"
+      }
+    },
+    "issues": [],
+    "notes": [
+      "Synthetic example only. Offsets are reference values and are not verified."
+    ]
+  },
+  "preflight": {
+    "checks": [],
+    "ssh_path": "/usr/bin/ssh",
+    "ssh_version": "OpenSSH_example"
+  },
+  "checks": [
+    {
+      "id": "uid",
+      "status": "ok",
+      "detail": "remote uid is 0 (root)",
+      "gate": true
+    },
+    {
+      "id": "mtd_profile",
+      "status": "ok",
+      "detail": "MTD names, sizes and geometry match the reference profile",
+      "gate": true
+    }
+  ],
+  "artifacts": [
+    {
+      "partition": "mtd1",
+      "name": "tpl",
+      "kind": "mtd_image",
+      "command": "nanddump --bb=padbad --omitoob /dev/mtd1",
+      "path": "images/mtd1.tpl.bin",
+      "part_path": null,
+      "status": "completed",
+      "expected_size": 2097152,
+      "actual_size": 2097152,
+      "bytes_received": 2097152,
+      "bytes_written": 2097152,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "exit_code": 0,
+      "error": null,
+      "stderr_tail": "",
+      "stderr_truncated": false,
+      "counters_exact": true,
+      "files": {
+        "part": {
+          "exists": false,
+          "size": null,
+          "kind": null,
+          "path": "images/mtd1.tpl.bin.part"
+        },
+        "final": {
+          "exists": true,
+          "size": 2097152,
+          "kind": "file",
+          "path": "images/mtd1.tpl.bin",
+          "sha256_verified": true,
+          "created_by_this_attempt": true
+        },
+        "finalization_complete": true
+      },
+      "started_at": "2026-01-01T00:01:00Z",
+      "completed_at": "2026-01-01T00:02:00Z"
+    },
+    {
+      "partition": null,
+      "name": "bkupgrade",
+      "kind": "tar",
+      "command": "tar -cf - -C /bkupgrade .",
+      "path": "bkupgrade.tar",
+      "part_path": null,
+      "status": "completed",
+      "expected_size": null,
+      "actual_size": 10485760,
+      "bytes_received": 10485760,
+      "bytes_written": 10485760,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "exit_code": 0,
+      "error": null,
+      "stderr_tail": "",
+      "stderr_truncated": false,
+      "counters_exact": true,
+      "files": {
+        "part": {
+          "exists": false,
+          "size": null,
+          "kind": null,
+          "path": "bkupgrade.tar.part"
+        },
+        "final": {
+          "exists": true,
+          "size": 10485760,
+          "kind": "file",
+          "path": "bkupgrade.tar",
+          "sha256_verified": true,
+          "created_by_this_attempt": true
+        },
+        "finalization_complete": true
+      },
+      "started_at": "2026-01-01T00:20:00Z",
+      "completed_at": "2026-01-01T00:21:00Z"
+    }
+  ],
+  "capture": {
+    "method": "logical_mtd_stream",
+    "transport": "ssh without PTY, stdout binary stream, stderr separated",
+    "nanddump_options": [
+      "--bb=padbad",
+      "--omitoob"
+    ],
+    "ecc": "driver_default",
+    "oob": "omitted",
+    "bad_blocks": "replaced by 0xFF by nanddump with stream length preserved",
+    "quasar_stopped": false,
+    "ubi_detached": false,
+    "sync_claimed_consistent": false,
+    "automatic_retry": false
+  },
+  "consistency": {
+    "physical_nand_oob_backup": false,
+    "mtd0_complete": false,
+    "reserved_areas_backed_up": false,
+    "offline_consistent_snapshot": false,
+    "independent_nand_reread": false,
+    "restore_tested": false,
+    "hardware_validation_of_this_tool": false
+  },
+  "consistency_notes": [
+    "Synthetic example. This is not a real backup and cannot be verified.",
+    "No physical OOB, no mtd0, no reserved areas, no offline-consistent UBI snapshot.",
+    "No restore was tested and no hardware validation was performed."
+  ],
+  "warnings": [
+    "Synthetic example only.",
+    "device tree model does not contain YNDX-00020; a family string is not proof of the exact article."
+  ],
+  "errors": []
+}

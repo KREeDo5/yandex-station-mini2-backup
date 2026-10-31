@@ -1,0 +1,53 @@
+# AI-generated project file. Review before use. See AI_DISCLOSURE.md.
+# Local backups and device images
+backups/
+backup-*/
+images/
+*.bin
+*.part
+*.tar
+*.ubifs
+*.img
+*.encrypt
+*.oob
+*.mtd
+*.cpio
+*.zip
+ota/
+sw-description*
+reports/
+local-reports/
+report.json
+checksums.sha256
+external-copy-report-*.json
+*.report.json
+!examples/report.redacted.json
+
+# Logs and local result files
+*.log
+*.jsonl
+
+# Keys and secrets
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+id_ecdsa*
+.env
+.env.*
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store

@@ -1,0 +1,32 @@
+# AI-generated project metadata. Review before use. See AI_DISCLOSURE.md.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yandex-station-mini2-backup"
+version = "0.1.0"
+description = "Experimental, AI-generated read-only backup tooling for Yandex Station Mini 2 (YNDX-00020) over root SSH"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "yandex-station-mini2-backup contributors" }]
+keywords = ["yandex", "station", "mini2", "backup", "mtd", "ssh"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: System :: Systems Administration",
+]
+dependencies = []
+
+[project.scripts]
+mini2-backup = "mini2_backup.cli:main"
+
+[tool.setuptools]
+packages = ["mini2_backup"]
