@@ -14,7 +14,8 @@ from typing import Iterable, List
 from . import TOOL_NAME, __version__
 from .util import utc_now, write_text_exclusive
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
+LEGACY_SCHEMA_VERSIONS = ("1.0",)
 
 FALSE_CLAIMS = (
     "physical_nand_oob_backup",

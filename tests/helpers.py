@@ -14,7 +14,13 @@ import os
 import tarfile
 from pathlib import Path
 
-from mini2_backup.profile import ERASESIZE, OOBSIZE, REFERENCE_LAYOUT, WRITESIZE
+from mini2_backup.profile import (
+    ERASESIZE,
+    OOBSIZE,
+    REFERENCE_BY_ID,
+    REFERENCE_LAYOUT,
+    WRITESIZE,
+)
 
 PROC_MTD = """dev:    size   erasesize  name
 mtd0: 00200000 00020000 "bootloader"
@@ -195,14 +201,14 @@ def make_valid_backup(root: Path, tar_members=None) -> dict:
     root.mkdir(parents=True, exist_ok=True)
     images = root / "images"
     images.mkdir()
-    image_data = b"firmware-image-bytes" * 100
+    image_data = b"I" * REFERENCE_BY_ID["mtd4"].size
     image_path = images / "mtd4.nv.bin"
     image_path.write_bytes(image_data)
     tar_path = root / "bkupgrade.tar"
     make_tar(tar_path, tar_members)
 
     report = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "tool": {"name": "yandex-station-mini2-backup", "version": "0.1.0"},
         "generated_by_ai": True,
         "synthetic_example": False,
@@ -229,7 +235,9 @@ def make_valid_backup(root: Path, tar_members=None) -> dict:
                 "sha256": sha256_bytes(image_data),
                 "exit_code": 0,
                 "error": None,
+                "stderr_tail": "",
                 "stderr_truncated": False,
+                "counters_exact": True,
                 "files": {
                     "part": {"exists": False, "size": None, "kind": None,
                              "path": "images/mtd4.nv.bin.part"},
@@ -254,7 +262,9 @@ def make_valid_backup(root: Path, tar_members=None) -> dict:
                 "sha256": sha256_file(tar_path),
                 "exit_code": 0,
                 "error": None,
+                "stderr_tail": "",
                 "stderr_truncated": False,
+                "counters_exact": True,
                 "files": {
                     "part": {"exists": False, "size": None, "kind": None,
                              "path": "bkupgrade.tar.part"},

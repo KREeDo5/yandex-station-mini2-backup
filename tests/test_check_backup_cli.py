@@ -3,15 +3,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import errno
+import io
 import json
 import os
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from mini2_backup.backup import BackupOptions, _Logger, run_backup
+from mini2_backup.backup import BackupOptions, _Logger, _default_confirm, run_backup
 from mini2_backup.check import run_check
 from mini2_backup.cli import main
 from mini2_backup.errors import GateError, UsageError
@@ -26,6 +29,7 @@ from .helpers import (
     check_runner,
     make_identity,
     make_tar,
+    make_valid_backup,
     sysfs_probe,
 )
 
@@ -653,6 +657,153 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             main(["copy-external", "--source", "/tmp/x"])
         self.assertNotEqual(caught.exception.code, 0)
+
+    def test_backup_json_stdout_is_one_json_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            identity = make_identity(Path(tmp))
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            def fake_run_backup(_target, _options, printer=None):
+                if printer:
+                    printer("progress line")
+                return types.SimpleNamespace(
+                    report={"status": "failed", "artifacts": []},
+                    exit_code=1, output_dir=None)
+
+            with mock.patch("mini2_backup.cli.run_backup",
+                            side_effect=fake_run_backup):
+                with contextlib.redirect_stdout(stdout), \
+                        contextlib.redirect_stderr(stderr):
+                    code = main([
+                        "backup", "--json", "--yes",
+                        "--host", "192.0.2.10", "--identity", str(identity),
+                        "--output-root", str(Path(tmp) / "out"),
+                        "--partitions", "mtd4",
+                    ])
+        self.assertEqual(code, 1)
+        parsed = json.loads(stdout.getvalue())
+        self.assertEqual(parsed["status"], "failed")
+        self.assertIn("progress line", stderr.getvalue())
+        self.assertIn("EXPERIMENTAL", stderr.getvalue())
+        self.assertNotIn("progress line", stdout.getvalue())
+
+    def test_copy_external_json_stdout_is_one_json_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source"
+            destination = Path(tmp) / "destination"
+            source.mkdir()
+            destination.mkdir()
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            def fake_copy_external(_source, _destination, *, printer=None,
+                                   **_kwargs):
+                if printer:
+                    printer("copy progress")
+                return {"status": "completed",
+                        "destination_copy": str(_destination / "copy"),
+                        "physical_independence": "not_verified"}
+
+            with mock.patch("mini2_backup.cli.copy_external",
+                            side_effect=fake_copy_external):
+                with contextlib.redirect_stdout(stdout), \
+                        contextlib.redirect_stderr(stderr):
+                    code = main([
+                        "copy-external", "--json",
+                        "--source", str(source), "--destination", str(destination),
+                        "--allow-non-volume",
+                    ])
+        self.assertEqual(code, 0)
+        parsed = json.loads(stdout.getvalue())
+        self.assertEqual(parsed["status"], "completed")
+        self.assertIn("copy progress", stderr.getvalue())
+        self.assertNotIn("copy progress", stdout.getvalue())
+
+    def test_dry_run_json_stdout_is_one_json_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            identity = make_identity(Path(tmp))
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), \
+                    contextlib.redirect_stderr(stderr):
+                code = main([
+                    "backup", "--dry-run", "--json", "--yes",
+                    "--host", "192.0.2.10", "--identity", str(identity),
+                    "--output-root", str(Path(tmp) / "out"),
+                    "--partitions", "mtd4",
+                ])
+        self.assertEqual(code, 0)
+        parsed = json.loads(stdout.getvalue())
+        self.assertEqual(parsed["status"], "dry_run")
+        self.assertIn("Planned read-only artifacts", stderr.getvalue())
+        self.assertNotIn("Planned read-only artifacts", stdout.getvalue())
+
+    def test_copy_external_json_stdout_contains_only_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source"
+            destination = Path(tmp) / "destination"
+            source.mkdir()
+            destination.mkdir()
+            (source / "a.txt").write_text("hello\n", encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), \
+                    contextlib.redirect_stderr(stderr):
+                code = main([
+                    "copy-external", "--json", "--allow-non-volume",
+                    "--source", str(source), "--destination", str(destination),
+                ])
+        self.assertEqual(code, 0)
+        parsed = json.loads(stdout.getvalue())
+        self.assertEqual(parsed["status"], "completed")
+        self.assertIn("Copying to", stderr.getvalue())
+        self.assertNotIn("Copying to", stdout.getvalue())
+
+    def test_backup_json_error_stdout_is_one_json_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            identity = make_identity(Path(tmp))
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), \
+                    contextlib.redirect_stderr(stderr):
+                code = main([
+                    "backup", "--json", "--yes",
+                    "--host=-oProxyCommand=evil", "--identity", str(identity),
+                    "--output-root", str(Path(tmp) / "out"),
+                ])
+        self.assertEqual(code, 2)
+        parsed = json.loads(stdout.getvalue())
+        self.assertEqual(parsed["status"], "failed")
+        self.assertIn("invalid host", parsed["error"])
+        self.assertIn("EXPERIMENTAL", stderr.getvalue())
+
+    def test_verify_json_filesystem_error_is_one_json_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "backup"
+            make_valid_backup(root)
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with mock.patch("mini2_backup.verify.stream_sha256",
+                            side_effect=OSError(5, "read boom")):
+                with contextlib.redirect_stdout(stdout), \
+                        contextlib.redirect_stderr(stderr):
+                    code = main(["verify", str(root), "--json"])
+        self.assertEqual(code, 1)
+        parsed = json.loads(stdout.getvalue())
+        self.assertEqual(parsed["status"], "failed")
+        self.assertTrue(any("cannot compute SHA-256" in e
+                            for e in parsed["errors"]))
+
+    def test_confirm_prompt_goes_to_stderr(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with mock.patch("builtins.input", return_value="yes"):
+            with contextlib.redirect_stdout(stdout), \
+                    contextlib.redirect_stderr(stderr):
+                self.assertTrue(_default_confirm("Type yes: "))
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Type yes:", stderr.getvalue())
 
 
 if __name__ == "__main__":

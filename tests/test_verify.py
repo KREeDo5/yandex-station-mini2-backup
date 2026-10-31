@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from mini2_backup.profile import REFERENCE_BY_ID
 from mini2_backup.verify import inspect_tar, verify_backup
 
 from .helpers import make_tar, make_valid_backup, sha256_file
@@ -195,15 +198,28 @@ class VerifyTests(unittest.TestCase):
         self.assertTrue(any("skipped in a report marked completed" in e
                             for e in result["errors"]))
 
-    def test_report_without_new_counter_fields_still_passes(self):
+    def test_legacy_1_0_report_passes_with_limited_verification_warning(self):
+        self.report["schema_version"] = "1.0"
         for artifact in self.report["artifacts"]:
             artifact.pop("bytes_received", None)
             artifact.pop("bytes_written", None)
             artifact.pop("stderr_truncated", None)
+            artifact.pop("stderr_tail", None)
+            artifact.pop("counters_exact", None)
             artifact.pop("files", None)
         self.rewrite_report()
         result = verify_backup(self.root)
         self.assertEqual(result["status"], "ok", result["errors"])
+        self.assertTrue(any("legacy schema 1.0" in w for w in result["warnings"]))
+
+    def test_v11_report_without_files_fails(self):
+        for artifact in self.report["artifacts"]:
+            artifact.pop("files", None)
+        self.rewrite_report()
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("requires a files object" in e
+                            for e in result["errors"]))
 
     def test_bytes_written_mismatch_fails(self):
         self.report["artifacts"][0]["bytes_written"] = 1
@@ -211,6 +227,134 @@ class VerifyTests(unittest.TestCase):
         result = verify_backup(self.root)
         self.assertEqual(result["status"], "failed")
         self.assertTrue(any("bytes_written mismatch" in e for e in result["errors"]))
+
+    def test_arbitrary_artifact_kind_fails(self):
+        self.report["artifacts"][0]["kind"] = "raw_nand"
+        self.rewrite_report()
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("unsupported artifact kind" in e
+                            for e in result["errors"]))
+
+    def test_mtd0_partition_is_forbidden(self):
+        artifact = self.report["artifacts"][0]
+        artifact["partition"] = "mtd0"
+        artifact["name"] = REFERENCE_BY_ID["mtd0"].name
+        artifact["expected_size"] = REFERENCE_BY_ID["mtd0"].size
+        self.rewrite_report()
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("mtd0 is forbidden" in e for e in result["errors"]))
+
+    def test_unknown_partition_is_rejected(self):
+        artifact = self.report["artifacts"][0]
+        artifact["partition"] = "mtd9"
+        artifact["name"] = "unknown"
+        artifact["expected_size"] = 1
+        self.rewrite_report()
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("unsupported mtd_image partition" in e
+                            for e in result["errors"]))
+
+    def test_duplicate_partition_is_rejected(self):
+        duplicate = copy.deepcopy(self.report["artifacts"][0])
+        duplicate["path"] = "images/mtd4.nv.duplicate.bin"
+        (self.root / "images/mtd4.nv.duplicate.bin").write_bytes(
+            (self.root / "images/mtd4.nv.bin").read_bytes())
+        self.report["artifacts"].append(duplicate)
+        self.rewrite_report()
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("duplicate partition mtd4" in e
+                            for e in result["errors"]))
+
+    def test_tampered_expected_size_is_rejected(self):
+        self.report["artifacts"][0]["expected_size"] += 1
+        self.rewrite_report()
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("expected_size" in e and "reference" in e
+                            for e in result["errors"]))
+
+    def test_mtd_image_name_must_match_reference(self):
+        self.report["artifacts"][0]["name"] = "wrong"
+        self.rewrite_report()
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("does not match reference" in e
+                            for e in result["errors"]))
+
+    def test_tar_partition_must_be_null(self):
+        self.report["artifacts"][1]["partition"] = "mtd4"
+        self.rewrite_report()
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("tar artifact must have partition=null" in e
+                            for e in result["errors"]))
+
+    def test_actual_file_size_must_match_reference(self):
+        target = self.root / "images/mtd4.nv.bin"
+        target.write_bytes(target.read_bytes()[:-1])
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("size mismatch" in e for e in result["errors"]))
+
+    def test_v11_missing_counter_field_fails(self):
+        self.report["artifacts"][0].pop("bytes_received", None)
+        self.rewrite_report()
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("requires non-negative integer bytes_received" in e
+                            for e in result["errors"]))
+
+    def test_partitions_checked_reports_actual_subset(self):
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "ok", result["errors"])
+        self.assertEqual(result["partitions_checked"], ["mtd4"])
+        self.assertEqual(result["partitions_in_report"], ["mtd4"])
+        self.assertEqual(result["tar_checked"], ["bkupgrade.tar"])
+
+    def test_image_read_error_returns_failed_report(self):
+        with mock.patch(
+                "mini2_backup.verify.stream_sha256",
+                side_effect=OSError(5, "read boom")):
+            result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("cannot compute SHA-256" in e
+                            for e in result["errors"]))
+
+    def test_stat_error_returns_failed_report(self):
+        with mock.patch(
+                "mini2_backup.verify._stat_size",
+                side_effect=OSError(5, "stat boom")):
+            result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("cannot stat file" in e for e in result["errors"]))
+
+    def test_tar_inspection_error_returns_failed_report(self):
+        with mock.patch(
+                "mini2_backup.verify.inspect_tar",
+                side_effect=OSError(5, "tar boom")):
+            result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("cannot inspect tar" in e for e in result["errors"]))
+
+    def test_completed_counters_exact_false_fails(self):
+        self.report["artifacts"][0]["counters_exact"] = False
+        self.rewrite_report()
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("counters_exact is not true" in e
+                            for e in result["errors"]))
+
+    def test_completed_bytes_received_mismatch_fails(self):
+        self.report["artifacts"][0]["bytes_received"] += 1
+        self.rewrite_report()
+        result = verify_backup(self.root)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("bytes_received mismatch" in e
+                            for e in result["errors"]))
 
     def test_failed_backup_status_fails(self):
         self.report["status"] = "failed"

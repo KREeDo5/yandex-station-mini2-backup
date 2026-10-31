@@ -15,7 +15,8 @@ from pathlib import Path, PurePosixPath
 from typing import Dict, List
 
 from . import TOOL_NAME, __version__
-from .report import FALSE_CLAIMS, SCHEMA_VERSION
+from .profile import ALLOWED_BACKUP_IDS, REFERENCE_BY_ID
+from .report import FALSE_CLAIMS, LEGACY_SCHEMA_VERSIONS, SCHEMA_VERSION
 from .util import (
     ensure_regular_file,
     human_bytes,
@@ -47,6 +48,9 @@ def new_verification_report(root: Path) -> dict:
         "backup_report_schema": None,
         "artifacts_checked": 0,
         "bytes_checked": 0,
+        "partitions_in_report": [],
+        "partitions_checked": [],
+        "tar_checked": [],
         "checks": [],
         "errors": [],
         "warnings": [],
@@ -155,6 +159,10 @@ def _load_report(root: Path) -> dict:
     return data
 
 
+def _stat_size(path: Path) -> int:
+    return path.stat().st_size
+
+
 def _check_file_state(root: Path, state, label: str, errors: List[str],
                       warnings: List[str]):
     if state is None:
@@ -174,7 +182,11 @@ def _check_file_state(root: Path, state, label: str, errors: List[str],
         except ValueError as exc:
             errors.append("%s: %s" % (label, exc))
             return None, None, None
-        size = target.stat().st_size
+        try:
+            size = _stat_size(target)
+        except OSError as exc:
+            errors.append("%s: cannot stat file: %s" % (label, exc))
+            return None, None, None
         reported_size = state.get("size")
         if reported_size is not None and reported_size != size:
             errors.append("%s size mismatch: state says %r, file is %d"
@@ -189,6 +201,116 @@ def _check_file_state(root: Path, state, label: str, errors: List[str],
         return None, None, None
     errors.append("%s has invalid exists value %r" % (label, exists))
     return None, None, None
+
+
+ALLOWED_ARTIFACT_KINDS = ("mtd_image", "tar")
+
+
+def _validate_artifact_semantics(entry: dict, label: str, errors: List[str],
+                                 seen_partitions: set):
+    kind = entry.get("kind")
+    if kind not in ALLOWED_ARTIFACT_KINDS:
+        errors.append("%s: unsupported artifact kind %r" % (label, kind))
+        return False, None
+    if kind == "tar":
+        if "partition" not in entry or entry.get("partition") is not None:
+            errors.append("%s: tar artifact must have partition=null" % label)
+            return False, None
+        return True, None
+
+    partition = entry.get("partition")
+    if partition == "mtd0":
+        errors.append("%s: mtd0 is forbidden" % label)
+        return False, None
+    if not isinstance(partition, str) or partition not in ALLOWED_BACKUP_IDS:
+        errors.append("%s: unsupported mtd_image partition %r" % (label, partition))
+        return False, None
+    if partition in seen_partitions:
+        errors.append("%s: duplicate partition %s" % (label, partition))
+        return False, partition
+    seen_partitions.add(partition)
+
+    reference = REFERENCE_BY_ID[partition]
+    if entry.get("name") != reference.name:
+        errors.append("%s: name %r does not match reference %r for %s"
+                      % (label, entry.get("name"), reference.name, partition))
+        return False, partition
+    if entry.get("expected_size") != reference.size:
+        errors.append("%s: expected_size %r does not match reference %d for %s"
+                      % (label, entry.get("expected_size"), reference.size, partition))
+        return False, partition
+    return True, partition
+
+
+def _validate_v11_fields(entry: dict, label: str, errors: List[str]) -> bool:
+    ok = True
+    for key in ("bytes_received", "bytes_written"):
+        value = entry.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            errors.append("%s: schema 1.1 requires non-negative integer %s"
+                          % (label, key))
+            ok = False
+    if not isinstance(entry.get("stderr_tail"), str):
+        errors.append("%s: schema 1.1 requires string stderr_tail" % label)
+        ok = False
+    if not isinstance(entry.get("stderr_truncated"), bool):
+        errors.append("%s: schema 1.1 requires boolean stderr_truncated" % label)
+        ok = False
+    if not isinstance(entry.get("counters_exact"), bool):
+        errors.append("%s: schema 1.1 requires boolean counters_exact" % label)
+        ok = False
+
+    files = entry.get("files")
+    if not isinstance(files, dict):
+        errors.append("%s: schema 1.1 requires a files object" % label)
+        return False
+    for name in ("part", "final"):
+        state = files.get(name)
+        if not isinstance(state, dict):
+            errors.append("%s: schema 1.1 requires files.%s object"
+                          % (label, name))
+            ok = False
+            continue
+        for key in ("exists", "size", "kind", "path"):
+            if key not in state:
+                errors.append("%s: schema 1.1 requires files.%s.%s"
+                              % (label, name, key))
+                ok = False
+        if "exists" in state and not isinstance(state.get("exists"), bool):
+            errors.append("%s: files.%s.exists must be boolean" % (label, name))
+            ok = False
+        if "size" in state:
+            size = state.get("size")
+            if size is not None and (not isinstance(size, int)
+                                     or isinstance(size, bool) or size < 0):
+                errors.append("%s: files.%s.size must be a non-negative "
+                              "integer or null" % (label, name))
+                ok = False
+        if "kind" in state and state.get("kind") not in (
+                None, "file", "dir", "symlink", "other"):
+            errors.append("%s: files.%s.kind has unexpected value %r"
+                          % (label, name, state.get("kind")))
+            ok = False
+        if "path" in state and not isinstance(state.get("path"), str):
+            errors.append("%s: files.%s.path must be a string" % (label, name))
+            ok = False
+
+    final = files.get("final")
+    if isinstance(final, dict):
+        if not isinstance(final.get("sha256_verified"), bool):
+            errors.append("%s: schema 1.1 requires boolean "
+                          "files.final.sha256_verified" % label)
+            ok = False
+        created = final.get("created_by_this_attempt")
+        if not (isinstance(created, bool) or created == "unknown"):
+            errors.append(("%s: files.final.created_by_this_attempt must be "
+                           'boolean or "unknown"') % label)
+            ok = False
+    if not isinstance(files.get("finalization_complete"), bool):
+        errors.append("%s: schema 1.1 requires boolean "
+                      "files.finalization_complete" % label)
+        ok = False
+    return ok
 
 
 def verify_backup(root: Path) -> dict:
@@ -213,13 +335,20 @@ def verify_backup(root: Path) -> dict:
 
     schema = backup.get("schema_version")
     report["backup_report_schema"] = schema
-    if schema != SCHEMA_VERSION:
-        errors.append("unsupported backup report schema %r (expected %r)"
-                      % (schema, SCHEMA_VERSION))
+    legacy = schema in LEGACY_SCHEMA_VERSIONS
+    if schema != SCHEMA_VERSION and not legacy:
+        errors.append("unsupported backup report schema %r (expected %r or legacy %s)"
+                      % (schema, SCHEMA_VERSION, ", ".join(LEGACY_SCHEMA_VERSIONS)))
         _add_check(report, "schema", False, "unsupported schema_version")
         report["completed_at"] = utc_now()
         return report
-    _add_check(report, "schema", True, "schema_version %s" % schema)
+    if legacy:
+        warnings.append(
+            "legacy schema %s: limited verification; files/counter state is not "
+            "required and final file state cannot be fully validated" % schema
+        )
+    _add_check(report, "schema", True,
+               "schema_version %s%s" % (schema, " (legacy)" if legacy else ""))
 
     if backup.get("synthetic_example"):
         errors.append("this report is marked as a synthetic example and cannot be verified")
@@ -254,11 +383,22 @@ def verify_backup(root: Path) -> dict:
 
     completed: Dict[str, dict] = {}
     seen = set()
+    seen_partitions = set()
+    partitions_in_report = set()
+    partitions_checked = set()
     for index, entry in enumerate(artifacts):
         if not isinstance(entry, dict):
             errors.append("artifact #%d is not an object" % index)
             continue
         label = "%s/%s" % (entry.get("partition") or "tar", entry.get("name") or "?")
+        semantic_ok, partition = _validate_artifact_semantics(
+            entry, label, errors, seen_partitions)
+        if not semantic_ok:
+            continue
+        if partition is not None:
+            partitions_in_report.add(partition)
+        if not legacy and not _validate_v11_fields(entry, label, errors):
+            continue
         status = entry.get("status")
         if status == "completed":
             relative = entry.get("path")
@@ -276,10 +416,19 @@ def verify_backup(root: Path) -> dict:
                 errors.append("%s: %s" % (label, exc))
                 continue
             expected_size = entry.get("expected_size")
-            actual_size = target.stat().st_size
+            try:
+                actual_size = _stat_size(target)
+            except OSError as exc:
+                errors.append("%s: cannot stat file: %s" % (label, exc))
+                continue
             if expected_size is not None and actual_size != expected_size:
                 errors.append("%s size mismatch: expected %s, found %s"
                               % (label, expected_size, actual_size))
+                continue
+            if (partition is not None
+                    and actual_size != REFERENCE_BY_ID[partition].size):
+                errors.append("%s reference size mismatch: expected %d, found %d"
+                              % (label, REFERENCE_BY_ID[partition].size, actual_size))
                 continue
             reported_actual = entry.get("actual_size")
             reported_written = entry.get("bytes_written")
@@ -295,8 +444,21 @@ def verify_backup(root: Path) -> dict:
             if received is not None and (not isinstance(received, int) or received < 0):
                 errors.append("%s has an invalid bytes_received value" % label)
                 continue
+            if not legacy:
+                if entry.get("counters_exact") is not True:
+                    errors.append("%s is completed but counters_exact is not true"
+                                  % label)
+                    continue
+                if received != actual_size:
+                    errors.append("%s bytes_received mismatch: report says %r, "
+                                  "file is %d" % (label, received, actual_size))
+                    continue
+                if reported_written != actual_size:
+                    errors.append("%s bytes_written is not the actual file size"
+                                  % label)
+                    continue
             files = entry.get("files")
-            if files is not None:
+            if not legacy and files is not None:
                 if not isinstance(files, dict):
                     errors.append("%s files field is not an object" % label)
                     continue
@@ -339,12 +501,18 @@ def verify_backup(root: Path) -> dict:
             if not isinstance(digest, str) or not _SHA_RE.match(digest):
                 errors.append("%s has an invalid sha256 value" % label)
                 continue
-            actual_digest = stream_sha256(target)
+            try:
+                actual_digest = stream_sha256(target)
+            except OSError as exc:
+                errors.append("%s: cannot compute SHA-256: %s" % (label, exc))
+                continue
             if actual_digest != digest:
                 errors.append("%s SHA-256 mismatch" % label)
                 continue
             report["artifacts_checked"] += 1
             report["bytes_checked"] += actual_size
+            if partition is not None:
+                partitions_checked.add(partition)
             completed[relative] = entry
             if entry.get("kind") == "tar":
                 try:
@@ -352,17 +520,29 @@ def verify_backup(root: Path) -> dict:
                     _add_check(report, "tar:%s" % relative, True,
                                "%d members inspected, no extraction" % info["members"])
                     entry["tar_inspection"] = info
-                except ValueError as exc:
-                    errors.append("%s: %s" % (label, exc))
+                    report.setdefault("tar_checked", []).append(relative)
+                except (ValueError, OSError) as exc:
+                    errors.append("%s: cannot inspect tar: %s" % (label, exc))
         elif status == "skipped":
             if backup.get("status") == "completed":
                 errors.append("%s is skipped in a report marked completed" % label)
             else:
                 warnings.append("%s was skipped: %s"
                                 % (label, entry.get("error") or "no reason recorded"))
+            if not legacy:
+                files = entry.get("files")
+                if isinstance(files, dict):
+                    part_state = files.get("part") or {}
+                    final_state = files.get("final") or {}
+                    if part_state.get("exists") is not False or final_state.get("exists") is not False:
+                        errors.append("%s is skipped but files state reports an "
+                                      "existing file" % label)
+                    if files.get("finalization_complete") is not False:
+                        errors.append("%s is skipped but finalization is reported "
+                                      "complete" % label)
         elif status == "failed":
             files = entry.get("files")
-            if files is None:
+            if legacy or files is None:
                 part = entry.get("part_path")
                 if isinstance(part, str):
                     try:
@@ -371,7 +551,16 @@ def verify_backup(root: Path) -> dict:
                         errors.append("%s: invalid part path: %s" % (label, exc))
                     else:
                         if part_path.exists():
-                            part_size = part_path.stat().st_size
+                            try:
+                                part_size = _stat_size(part_path)
+                            except OSError as exc:
+                                errors.append("%s: cannot stat partial file: %s"
+                                              % (label, exc))
+                                part_size = None
+                            if part_size is None:
+                                errors.append("%s is marked as failed in the backup "
+                                              "report" % label)
+                                continue
                             reported_actual = entry.get("actual_size")
                             reported_written = entry.get("bytes_written")
                             if (reported_actual is not None
@@ -431,8 +620,14 @@ def verify_backup(root: Path) -> dict:
                             errors.append("%s claims a verified final without sha256"
                                           % label)
                         elif final_target is not None:
-                            if stream_sha256(final_target) != digest:
-                                errors.append("%s final SHA-256 mismatch" % label)
+                            try:
+                                final_digest = stream_sha256(final_target)
+                            except OSError as exc:
+                                errors.append("%s: cannot compute final SHA-256: %s"
+                                              % (label, exc))
+                            else:
+                                if final_digest != digest:
+                                    errors.append("%s final SHA-256 mismatch" % label)
                     else:
                         warnings.append("%s final exists but is not reported as verified"
                                         % label)
@@ -452,6 +647,9 @@ def verify_backup(root: Path) -> dict:
             errors.append("%s is marked as failed in the backup report" % label)
         else:
             errors.append("%s has unknown status %r" % (label, status))
+
+    report["partitions_in_report"] = sorted(partitions_in_report)
+    report["partitions_checked"] = sorted(partitions_checked)
 
     checksums_path = root / "checksums.sha256"
     checksum_entries: Dict[str, str] = {}
@@ -494,7 +692,12 @@ def verify_backup(root: Path) -> dict:
         except ValueError as exc:
             errors.append("checksum entry %s: %s" % (relative, exc))
             continue
-        if stream_sha256(target) != digest:
+        try:
+            actual_digest = stream_sha256(target)
+        except OSError as exc:
+            errors.append("cannot compute SHA-256 for %s: %s" % (relative, exc))
+            continue
+        if actual_digest != digest:
             errors.append("checksum mismatch for %s" % relative)
     missing = sorted(set(completed) - set(checksum_entries))
     for relative in missing:
@@ -528,6 +731,12 @@ def summarize_verification(report: dict) -> str:
         "Backup verification: %s" % report["status"].upper(),
         "Artifacts checked: %d" % report["artifacts_checked"],
         "Bytes checked: %s" % human_bytes(report["bytes_checked"]),
+        "Partitions checked: %s" % (", ".join(report.get("partitions_checked", []))
+                                     or "none"),
+        "Partitions present in report: %s"
+        % (", ".join(report.get("partitions_in_report", [])) or "none"),
+        "Tar archives checked: %s"
+        % (", ".join(report.get("tar_checked", [])) or "none"),
     ]
     for entry in report.get("checks", []):
         lines.append("  [%s] %s: %s" % (entry["status"], entry["id"], entry["detail"]))

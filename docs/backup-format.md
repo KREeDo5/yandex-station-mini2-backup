@@ -61,7 +61,7 @@ images/mtd4.nv.bin.part
 
 ## `report.json`
 
-Schema version: `1.0`. Основные поля:
+Schema version: `1.1`. Основные поля:
 
 | Поле | Смысл |
 |---|---|
@@ -85,7 +85,9 @@ Schema version: `1.0`. Основные поля:
 | `consistency_notes` | текстовые ограничения |
 | `warnings`, `errors` | предупреждения и ошибки |
 
-Поля `bytes_received`, `bytes_written`, `stderr_truncated` и `files` добавлены как совместимое расширение схемы `1.0`: `verify` принимает и более старые отчёты без них. Для старых отчётов используется прежняя проверка `path`/`part_path`.
+Схема `1.1` требует поля `bytes_received`, `bytes_written`, `stderr_tail`, `stderr_truncated`, `counters_exact` и `files` для каждого артефакта. Удаление `files` из отчёта `1.1` является ошибкой.
+
+Схема `1.0` поддерживается только как legacy: `verify` выдаёт предупреждение об ограниченной проверке и использует старые поля `path`, `part_path`, `actual_size` и `sha256`. Состояние `files` в legacy-отчётах не требуется и не может быть полностью проверено.
 
 `status: completed` означает только то, что запрошенные артефакты переданы и локально проверены. Он не означает, что копия полна, согласована или пригодна для восстановления.
 
@@ -143,7 +145,8 @@ Schema version: `1.0`. Основные поля:
 - `files` описывает оба пути независимо. Возможны состояния: только `.part`, `.part` и final, только final. Существующий final не считается проверенным, если `files.final.sha256_verified` не `true`;
 - `files.final.created_by_this_attempt` может быть `true`, `false` или `"unknown"`; `"unknown"` используется при неожиданной ошибке оркестратора. Для `status: completed` `verify` требует `true`;
 - `files.finalization_complete` истинно только после успешного создания final, строгого directory fsync и удаления `.part`;
-- `counters_exact=false` означает, что точные `bytes_received`/`bytes_written` неизвестны после неожиданной ошибки оркестратора; состояние `files` при этом остаётся фактическим.
+- `counters_exact=false` означает, что точные `bytes_received`/`bytes_written` неизвестны после неожиданной ошибки оркестратора; состояние `files` при этом остаётся фактическим;
+- для `status: completed` в схеме `1.1` обязательно `counters_exact=true`, а `bytes_received == bytes_written == фактический размер файла`. Для `failed` допускается `counters_exact=false`.
 
 Разделы, которые не начали читать после более ранней ошибки, попадают в отчёт как `status: skipped` с причиной. Это не успех и не попытка чтения.
 
@@ -165,6 +168,15 @@ Schema version: `1.0`. Основные поля:
 - открывает tar в потоковом режиме и проверяет имена и типы членов;
 - не извлекает и не исполняет содержимое;
 - не заявляет, что восстановление проверено.
+
+`verify` семантически проверяет артефакты:
+
+- разрешены только `kind: "mtd_image"` и `kind: "tar"`;
+- `mtd_image` допускает только `mtd1`–`mtd6`; `mtd0`, неизвестные partition и повторы запрещены;
+- `name`, `expected_size` и фактический размер `mtd_image` сверяются с `REFERENCE_BY_ID`;
+- для `tar` требуется `partition: null`;
+- неполный набор разделов допустим, если пользователь выбрал только часть `mtd1`–`mtd6`;
+- итоговый verification-отчёт содержит `partitions_in_report`, `partitions_checked` и `tar_checked`.
 
 `verify` может вернуть `failed`, если в отчёте есть failed-артефакт или оставлен `.part`. Это честный результат: такая копия неполна. Если в `files` указано, что final существует, но `sha256_verified=false`, `verify` не объявляет его проверенным.
 

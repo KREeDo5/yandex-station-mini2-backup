@@ -99,6 +99,10 @@ def _banner() -> None:
     print("[!] " + AI_NOTICE, file=sys.stderr)
 
 
+def _stderr_printer(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
 def _target(args: argparse.Namespace) -> SshTarget:
     return SshTarget(host=args.host, port=args.port, user=args.user,
                      identity=args.identity)
@@ -176,7 +180,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 dry_run=args.dry_run,
                 firmware_version=args.firmware_version,
             )
-            outcome = run_backup(_target(args), options)
+            outcome = run_backup(
+                _target(args), options,
+                printer=_stderr_printer if args.json else None,
+            )
             if args.json:
                 print(json.dumps(outcome.report, indent=2, ensure_ascii=False))
             else:
@@ -188,6 +195,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 report = verify_backup(Path(args.backup_dir))
             except ValueError as exc:
                 raise VerifyError(str(exc))
+            except OSError as exc:
+                raise VerifyError("filesystem error during verification: %s" % exc)
             if args.json:
                 sys.stdout.write(verification_json(report))
             else:
@@ -200,7 +209,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     Path(args.source), Path(args.destination),
                     report_path=Path(args.report) if args.report else None,
                     allow_non_volume=args.allow_non_volume,
-                    printer=print,
+                    printer=_stderr_printer if args.json else print,
                 )
             except ValueError as exc:
                 raise UsageError(str(exc))
@@ -220,7 +229,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("unknown command")
         return 2
     except ToolError as exc:
-        print("ERROR: %s" % exc, file=sys.stderr)
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "status": "failed",
+                "error": str(exc),
+                "tool": {"name": TOOL_NAME, "version": __version__},
+            }, indent=2, ensure_ascii=False))
+        else:
+            print("ERROR: %s" % exc, file=sys.stderr)
         return exc.exit_code
     except KeyboardInterrupt:
         print("Interrupted. Partial files were kept; no success is claimed.",

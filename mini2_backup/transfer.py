@@ -36,7 +36,7 @@ class TransferInterrupted(KeyboardInterrupt):
 
     def __init__(self, part_path: Path, bytes_received: int, bytes_written: int,
                  files: dict):
-        super().__init__("transfer interrupted; partial file kept: %s" % part_path)
+        super().__init__("transfer interrupted; inspect files state in the report")
         self.part_path = str(part_path)
         self.bytes_received = bytes_received
         self.bytes_written = bytes_written

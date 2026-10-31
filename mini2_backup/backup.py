@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -131,8 +132,9 @@ class _SafeLog:
 
 
 def _default_confirm(prompt: str) -> bool:
+    print(prompt, end="", file=sys.stderr, flush=True)
     try:
-        answer = input(prompt)
+        answer = input()
     except EOFError:
         return False
     return answer.strip().lower() == "yes"
@@ -440,7 +442,7 @@ def _run_backup_body(
                 _append_failed(report, partition_id, part.name, "mtd_image",
                                _artifact_path(partition_id), expected,
                                exc.bytes_written, None,
-                               "interrupted by user; partial file kept",
+                               "interrupted by user; inspect files state",
                                bytes_received=exc.bytes_received,
                                files=exc.files)
                 for remaining in partition_ids[position + 1:]:
@@ -506,7 +508,7 @@ def _run_backup_body(
                 except TransferInterrupted as exc:
                     _append_failed(report, None, "bkupgrade", "tar",
                                    "bkupgrade.tar", None, exc.bytes_written, None,
-                                   "interrupted by user; partial file kept",
+                                   "interrupted by user; inspect files state",
                                    bytes_received=exc.bytes_received,
                                    files=exc.files)
                     raise
@@ -525,7 +527,7 @@ def _run_backup_body(
                     exit_code = 1
 
     except KeyboardInterrupt:
-        report["errors"].append("interrupted by user; partial files were kept")
+        report["errors"].append("interrupted by user; inspect files state")
         log.log("interrupted by user")
         exit_code = 130
         finish_report(report, "failed")
